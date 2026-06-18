@@ -65,43 +65,115 @@ class _ListaCompraScreenState extends State<ListaCompraScreen> {
     _generarLista();
   }
 
+  static DateTime _monday(DateTime d) =>
+      d.subtract(Duration(days: d.weekday - 1));
+
   Future<void> _generarLista() async {
     setState(() => _isLoading = true);
     try {
       final userId = Supabase.instance.client.auth.currentUser!.id;
+      final weekStart = _monday(DateTime.now());
+      final weekEnd = weekStart.add(const Duration(days: 6));
 
-      // Traemos todos los platos del plan semanal
       final data = await Supabase.instance.client
           .from('weekly_plan')
-          .select('description, meal_type')
-          .eq('client_id', userId);
+          .select('description, meal_type, ingredients')
+          .eq('client_id', userId)
+          .gte('plan_date', weekStart.toIso8601String().substring(0, 10))
+          .lte('plan_date', weekEnd.toIso8601String().substring(0, 10));
 
-      final Map<String, Set<String>> encontrados = {};
+      // Map: nombre_lowercase → {display, grams total}
+      final Map<String, Map<String, dynamic>> itemMap = {};
 
       for (final meal in data) {
-        final descripcion =
-            (meal['description'] as String? ?? '').toLowerCase();
+        final rawIngredients = meal['ingredients'];
 
-        for (final entry in _keywords.entries) {
-          final categoria = entry.key;
-          for (final keyword in entry.value) {
-            if (descripcion.contains(keyword.toLowerCase())) {
-              encontrados.putIfAbsent(categoria, () => {});
-              // Capitalizar la primera letra del ingrediente
-              final ingrediente =
-                  keyword[0].toUpperCase() + keyword.substring(1);
-              encontrados[categoria]!.add(ingrediente);
+        if (rawIngredients is List && rawIngredients.isNotEmpty) {
+          // ── Usar ingredientes explícitos ──────────────────────────────
+          for (final ing in rawIngredients) {
+            final name = ((ing['name'] as String?) ?? '').trim();
+            if (name.isEmpty) continue;
+            final gramsRaw = ing['grams'];
+            final grams = gramsRaw is int
+                ? gramsRaw
+                : (gramsRaw is num ? gramsRaw.toInt() : null);
+            final key = name.toLowerCase();
+
+            if (itemMap.containsKey(key)) {
+              final existing = itemMap[key]!;
+              final existingGrams = existing['grams'] as int?;
+              if (grams != null && existingGrams != null) {
+                itemMap[key]!['grams'] = existingGrams + grams;
+              } else if (grams != null) {
+                itemMap[key]!['grams'] = grams;
+              }
+            } else {
+              itemMap[key] = {'display': name, 'grams': grams};
+            }
+          }
+        } else {
+          // ── Fallback: adivinar por descripción ────────────────────────
+          final descripcion =
+              (meal['description'] as String? ?? '').toLowerCase();
+          for (final kEntry in _keywords.entries) {
+            for (final keyword in kEntry.value) {
+              if (descripcion.contains(keyword.toLowerCase())) {
+                final key = keyword.toLowerCase();
+                itemMap.putIfAbsent(key, () => {
+                  'display':
+                      keyword[0].toUpperCase() + keyword.substring(1),
+                  'grams': null,
+                });
+              }
             }
           }
         }
       }
 
-      // Convertir a Map<String, List<String>> ordenado
+      // Categorizar cada item
+      final Map<String, Set<String>> encontrados = {};
+
+      for (final entry in itemMap.entries) {
+        final nameLower = entry.key;
+        final display = entry.value['display'] as String;
+        final grams = entry.value['grams'] as int?;
+        final label = grams != null ? '$display (${grams}g)' : display;
+
+        bool matched = false;
+        for (final kEntry in _keywords.entries) {
+          bool hit = false;
+          for (final keyword in kEntry.value) {
+            if (nameLower.contains(keyword.toLowerCase())) {
+              hit = true;
+              break;
+            }
+          }
+          if (hit) {
+            encontrados.putIfAbsent(kEntry.key, () => {});
+            encontrados[kEntry.key]!.add(label);
+            matched = true;
+            break;
+          }
+        }
+
+        if (!matched) {
+          encontrados.putIfAbsent('🛍️ Otros', () => {});
+          encontrados['🛍️ Otros']!.add(label);
+        }
+      }
+
+      // Construir resultado ordenado
       final Map<String, List<String>> resultado = {};
       for (final cat in _keywords.keys) {
-        if (encontrados.containsKey(cat) && encontrados[cat]!.isNotEmpty) {
+        if (encontrados.containsKey(cat) &&
+            encontrados[cat]!.isNotEmpty) {
           resultado[cat] = encontrados[cat]!.toList()..sort();
         }
+      }
+      if (encontrados.containsKey('🛍️ Otros') &&
+          encontrados['🛍️ Otros']!.isNotEmpty) {
+        resultado['🛍️ Otros'] =
+            encontrados['🛍️ Otros']!.toList()..sort();
       }
 
       setState(() => _categorias = resultado);
@@ -119,20 +191,6 @@ class _ListaCompraScreenState extends State<ListaCompraScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Lista de la compra'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(0.5),
-          child: Container(height: 0.5, color: AppColors.border),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, size: 20),
-            onPressed: _generarLista,
-            color: AppColors.textMuted,
-          ),
-        ],
-      ),
       body: _isLoading
           ? const Center(
               child: CircularProgressIndicator(

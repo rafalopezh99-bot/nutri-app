@@ -13,38 +13,91 @@ class HomeClienteScreen extends StatefulWidget {
 }
 
 class _HomeClienteScreenState extends State<HomeClienteScreen> {
-  int _selectedTab = 1;
-  int _selectedDay = 0;
+  int _selectedTab = 0;
+  int _selectedDay = DateTime.now().weekday - 1;
+  late DateTime _weekStart;
   bool _isLoading = true;
   List<Map<String, dynamic>> _meals = [];
   int _weeklyTotal = 0;
   int _weeklyCompleted = 0;
+  List<Map<String, dynamic>> _measurements = [];
+  Map<String, dynamic> _profile = {};
 
   final List<String> _days = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
   final List<String> _daysFull = [
     'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'
   ];
 
+  static DateTime _monday(DateTime d) =>
+      d.subtract(Duration(days: d.weekday - 1));
+
+  DateTime get _selectedDate => _weekStart.add(Duration(days: _selectedDay));
+
+  String _weekLabel() {
+    const meses = [
+      '', 'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+      'jul', 'ago', 'sep', 'oct', 'nov', 'dic'
+    ];
+    final end = _weekStart.add(const Duration(days: 6));
+    if (_weekStart.month == end.month) {
+      return '${_weekStart.day}–${end.day} ${meses[end.month]}';
+    }
+    return '${_weekStart.day} ${meses[_weekStart.month]} – ${end.day} ${meses[end.month]}';
+  }
+
   @override
   void initState() {
     super.initState();
+    _weekStart = _monday(DateTime.now());
     _cargarPlan();
     _cargarEstadisticasSemana();
+    _cargarPerfil();
+    _cargarMedidas();
   }
 
   Future<void> _cargarEstadisticasSemana() async {
     try {
       final userId = Supabase.instance.client.auth.currentUser!.id;
+      final weekEnd = _weekStart.add(const Duration(days: 6));
       final data = await Supabase.instance.client
           .from('weekly_plan')
           .select('completed')
-          .eq('client_id', userId);
+          .eq('client_id', userId)
+          .gte('plan_date', _weekStart.toIso8601String().substring(0, 10))
+          .lte('plan_date', weekEnd.toIso8601String().substring(0, 10));
       if (!mounted) return;
       setState(() {
         _weeklyTotal = data.length;
         _weeklyCompleted =
             data.where((m) => m['completed'] == true).length;
       });
+    } catch (_) {}
+  }
+
+  Future<void> _cargarPerfil() async {
+    try {
+      final userId = Supabase.instance.client.auth.currentUser!.id;
+      final data = await Supabase.instance.client
+          .from('profiles')
+          .select()
+          .eq('id', userId)
+          .single();
+      if (!mounted) return;
+      setState(() => _profile = data);
+    } catch (_) {}
+  }
+
+  Future<void> _cargarMedidas() async {
+    try {
+      final userId = Supabase.instance.client.auth.currentUser!.id;
+      final data = await Supabase.instance.client
+          .from('measurements')
+          .select()
+          .eq('client_id', userId)
+          .order('created_at', ascending: true);
+      if (!mounted) return;
+      setState(() =>
+          _measurements = List<Map<String, dynamic>>.from(data));
     } catch (_) {}
   }
 
@@ -58,11 +111,12 @@ class _HomeClienteScreenState extends State<HomeClienteScreen> {
     setState(() => _isLoading = true);
     try {
       final userId = Supabase.instance.client.auth.currentUser!.id;
+      final dateStr = _selectedDate.toIso8601String().substring(0, 10);
       final data = await Supabase.instance.client
           .from('weekly_plan')
           .select()
           .eq('client_id', userId)
-          .eq('day_of_week', _daysFull[_selectedDay]);
+          .eq('plan_date', dateStr);
 
       final mealOrder = ['Desayuno', 'Almuerzo', 'Merienda', 'Cena'];
       final sorted = List<Map<String, dynamic>>.from(data);
@@ -167,7 +221,7 @@ class _HomeClienteScreenState extends State<HomeClienteScreen> {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Mi plan'),
+        title: Text(const ['Inicio', 'Mi plan', 'La compra', 'Chat', 'Mi perfil'][_selectedTab]),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(0.5),
           child: Container(height: 0.5, color: AppColors.border),
@@ -204,25 +258,335 @@ class _HomeClienteScreenState extends State<HomeClienteScreen> {
   }
 
   Widget _buildInicio() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+    return RefreshIndicator(
+      color: AppColors.primary,
+      onRefresh: () async {
+        await Future.wait([
+          _cargarPlan(),
+          _cargarEstadisticasSemana(),
+          _cargarPerfil(),
+          _cargarMedidas(),
+        ]);
+      },
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildGreeting(),
+            const SizedBox(height: 16),
+            _buildProgressBanner(),
+            if (_measurements.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              const SectionLabel('Progreso'),
+              _buildMedidasResumen(),
+              const SizedBox(height: 10),
+              _buildMiniGrafica(),
+            ],
+            const SizedBox(height: 20),
+            const SectionLabel('Próxima comida'),
+            _buildProximaComida(),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGreeting() {
+    final fullName = _profile['full_name'];
+    final nombre = (fullName is String && fullName.isNotEmpty)
+        ? fullName.split(' ').first
+        : '';
+    final h = DateTime.now().hour;
+    final saludo =
+        h < 12 ? 'Buenos días' : h < 20 ? 'Buenas tardes' : 'Buenas noches';
+    final now = DateTime.now();
+    final meses = [
+      '', 'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+      'jul', 'ago', 'sep', 'oct', 'nov', 'dic'
+    ];
+    final dias = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+    final diaSemana = dias[now.weekday - 1];
+    final fecha = '$diaSemana ${now.day} de ${meses[now.month]}';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$saludo${nombre.isNotEmpty ? ', $nombre' : ''} 👋',
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
+            color: AppColors.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          fecha,
+          style: const TextStyle(fontSize: 13, color: AppColors.textMuted),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMedidasResumen() {
+    final weights = _measurements
+        .where((m) => m['weight_kg'] != null)
+        .toList();
+    if (weights.isEmpty) return const SizedBox.shrink();
+
+    final lastPeso = (weights.last['weight_kg'] as num).toDouble();
+    final firstPeso = (weights.first['weight_kg'] as num).toDouble();
+    final cambio = lastPeso - firstPeso;
+
+    return Row(
+      children: [
+        Expanded(
+          child: _StatCard(
+            label: 'Peso actual',
+            value: '${lastPeso.toStringAsFixed(1)} kg',
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _StatCard(
+            label: 'Cambio total',
+            value:
+                '${cambio > 0 ? '+' : ''}${cambio.toStringAsFixed(1)} kg',
+            valueColor:
+                cambio < 0 ? AppColors.primary : AppColors.amber,
+          ),
+        ),
+        if (_measurements.any((m) => m['body_fat_pct'] != null)) ...[
+          const SizedBox(width: 10),
+          Expanded(
+            child: _StatCard(
+              label: 'Grasa corporal',
+              value: () {
+                final last = _measurements.lastWhere(
+                    (m) => m['body_fat_pct'] != null,
+                    orElse: () => {});
+                if (last.isEmpty) return '—';
+                return '${(last['body_fat_pct'] as num).toStringAsFixed(1)}%';
+              }(),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildMiniGrafica() {
+    final weights = _measurements
+        .where((m) => m['weight_kg'] != null)
+        .map((m) => (m['weight_kg'] as num).toDouble())
+        .toList();
+    if (weights.length < 2) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border, width: 0.5),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildProgressBanner(),
-          const SizedBox(height: 20),
-          const SectionLabel('Resumen de hoy'),
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(
-                child: _StatCard(
-                  label: 'Comidas hechas hoy',
-                  value: '$_completedCount/${_meals.length}',
+              const Text(
+                'Evolución del peso',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              Text(
+                '${weights.length} registros',
+                style: const TextStyle(
+                    fontSize: 11, color: AppColors.textMuted),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 110,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _SparklinePainter(values: weights),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '${weights.first.toStringAsFixed(1)} kg',
+                style: const TextStyle(
+                    fontSize: 11, color: AppColors.textMuted),
+              ),
+              Text(
+                '${weights.last.toStringAsFixed(1)} kg',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
                 ),
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildProximaComida() {
+    if (_meals.isEmpty) return const SizedBox.shrink();
+
+    final now = TimeOfDay.now();
+    final nowMin = now.hour * 60 + now.minute;
+
+    Map<String, dynamic>? proxima;
+    int? minDiff;
+
+    for (final meal in _meals) {
+      if (meal['completed'] == true) continue;
+      final time = meal['scheduled_time'] as String?;
+      if (time != null) {
+        final parts = time.split(':');
+        if (parts.length >= 2) {
+          final mealMin = (int.tryParse(parts[0]) ?? 0) * 60 +
+              (int.tryParse(parts[1]) ?? 0);
+          final diff = mealMin - nowMin;
+          if (diff >= 0 && (minDiff == null || diff < minDiff)) {
+            minDiff = diff;
+            proxima = meal;
+          }
+        }
+      }
+    }
+
+    // Si no hay próxima por horario, primera sin completar
+    if (proxima == null) {
+      for (final meal in _meals) {
+        if (meal['completed'] != true) {
+          proxima = meal;
+          break;
+        }
+      }
+    }
+
+    if (proxima == null) {
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.primaryDim,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: AppColors.primary.withOpacity(0.15), width: 0.5),
+        ),
+        child: const Row(
+          children: [
+            Text('🎉', style: TextStyle(fontSize: 20)),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '¡Todas las comidas de hoy completadas!',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final timeRaw = proxima['scheduled_time'] as String?;
+    String? timeLabel;
+    if (timeRaw != null) {
+      final parts = timeRaw.split(':');
+      if (parts.length >= 2) {
+        timeLabel =
+            '${parts[0].padLeft(2, '0')}:${parts[1].padLeft(2, '0')}';
+      }
+    }
+
+    return GestureDetector(
+      onTap: () => setState(() => _selectedTab = 1),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border, width: 0.5),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: AppColors.primaryDim,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.restaurant_rounded,
+                  size: 20, color: AppColors.primary),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        (proxima['meal_type'] ?? '').toUpperCase(),
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textMuted,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      if (timeLabel != null) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          timeLabel,
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    proxima['description'] ?? '',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded,
+                size: 18, color: AppColors.textMuted),
+          ],
+        ),
       ),
     );
   }
@@ -364,16 +728,62 @@ class _HomeClienteScreenState extends State<HomeClienteScreen> {
   Widget _buildPlan() {
     return Column(
       children: [
-        // Tabs de días
+        // Navegación de semana
+        Container(
+          color: AppColors.surface,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.chevron_left_rounded),
+                color: AppColors.textMuted,
+                iconSize: 22,
+                onPressed: () {
+                  setState(() => _weekStart =
+                      _weekStart.subtract(const Duration(days: 7)));
+                  _cargarPlan();
+                  _cargarEstadisticasSemana();
+                },
+              ),
+              Text(
+                _weekLabel(),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.chevron_right_rounded),
+                color: AppColors.textMuted,
+                iconSize: 22,
+                onPressed: () {
+                  setState(() =>
+                      _weekStart = _weekStart.add(const Duration(days: 7)));
+                  _cargarPlan();
+                  _cargarEstadisticasSemana();
+                },
+              ),
+            ],
+          ),
+        ),
+        Container(height: 0.5, color: AppColors.border),
+
+        // Tabs de días con fecha
         Container(
           color: AppColors.surface,
           padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               children: List.generate(_days.length, (i) {
                 final isSelected = i == _selectedDay;
+                final date = _weekStart.add(Duration(days: i));
+                final isToday = date.year == DateTime.now().year &&
+                    date.month == DateTime.now().month &&
+                    date.day == DateTime.now().day;
                 return GestureDetector(
                   onTap: () {
                     setState(() => _selectedDay = i);
@@ -383,22 +793,43 @@ class _HomeClienteScreenState extends State<HomeClienteScreen> {
                     duration: const Duration(milliseconds: 150),
                     margin: const EdgeInsets.only(right: 6),
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 7),
+                        horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
                       color: isSelected
                           ? AppColors.primary
                           : AppColors.surface2,
                       borderRadius: BorderRadius.circular(20),
+                      border: isToday && !isSelected
+                          ? Border.all(color: AppColors.primary, width: 1.5)
+                          : null,
                     ),
-                    child: Text(
-                      _days[i],
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: isSelected
-                            ? Colors.white
-                            : AppColors.textMuted,
-                      ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _days[i],
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: isSelected
+                                ? Colors.white
+                                : isToday
+                                    ? AppColors.primary
+                                    : AppColors.textMuted,
+                          ),
+                        ),
+                        Text(
+                          '${date.day}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isSelected
+                                ? Colors.white.withOpacity(0.85)
+                                : isToday
+                                    ? AppColors.primary
+                                    : AppColors.textMuted,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -686,6 +1117,60 @@ class _MealCardState extends State<_MealCard> {
     return '';
   }
 
+  void _verFotoCompleta(String url) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '',
+      barrierColor: Colors.black87,
+      transitionDuration: const Duration(milliseconds: 220),
+      transitionBuilder: (_, anim, __, child) => ScaleTransition(
+        scale: CurvedAnimation(parent: anim, curve: Curves.easeOutBack),
+        child: FadeTransition(opacity: anim, child: child),
+      ),
+      pageBuilder: (_, __, ___) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.network(
+                url,
+                fit: BoxFit.contain,
+                width: double.infinity,
+                errorBuilder: (_, __, ___) => const SizedBox(
+                  height: 200,
+                  child: Center(
+                    child: Icon(Icons.broken_image_outlined,
+                        color: Colors.white54, size: 48),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 10,
+              right: 10,
+              child: GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close_rounded,
+                      color: Colors.white, size: 20),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool completed = widget.meal['completed'] ?? false;
@@ -705,19 +1190,6 @@ class _MealCardState extends State<_MealCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Foto si existe
-          if (photoUrl != null)
-            GestureDetector(
-              onTap: widget.onSubirFoto,
-              child: Image.network(
-                photoUrl,
-                width: double.infinity,
-                height: 160,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-              ),
-            ),
-
           Padding(
             padding: const EdgeInsets.all(14),
             child: Column(
@@ -726,59 +1198,115 @@ class _MealCardState extends State<_MealCard> {
                 // Tipo + horario + badge completado
                 Row(
                   children: [
-                    Text(
-                      (widget.meal['meal_type'] ?? '').toUpperCase(),
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textMuted,
-                        letterSpacing: 0.5,
+                    SizedBox(
+                      width: 110,
+                      child: GestureDetector(
+                        onTap: _abrirComentario,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: (comment != null && comment.isNotEmpty)
+                                ? AppColors.primaryDim
+                                : AppColors.surface2,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            (comment != null && comment.isNotEmpty)
+                                ? '💬 Ver comentario'
+                                : '💬 Añadir comentario...',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.textMuted,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       ),
                     ),
-                    if (timeStr.isNotEmpty) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppColors.surface2,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.schedule_rounded,
-                                size: 10,
-                                color: AppColors.textMuted),
-                            const SizedBox(width: 3),
-                            Text(
-                              timeStr,
-                              style: const TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w500,
-                                color: AppColors.textMuted,
-                              ),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          Text(
+                            (widget.meal['meal_type'] ?? '').toUpperCase(),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textPrimary,
+                              letterSpacing: 0.8,
+                            ),
+                          ),
+                          if (timeStr.isNotEmpty) ...[
+                            const SizedBox(height: 3),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.schedule_rounded,
+                                    size: 13,
+                                    color: AppColors.textMuted),
+                                const SizedBox(width: 4),
+                                Text(
+                                  timeStr,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: AppColors.textMuted,
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
+                        ],
+                      ),
+                    ),
+                    SizedBox(
+                      width: 110,
+                      child: GestureDetector(
+                        onTap: photoUrl != null
+                            ? () => _verFotoCompleta(photoUrl)
+                            : widget.onSubirFoto,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: photoUrl != null
+                                ? AppColors.primaryDim
+                                : AppColors.surface2,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            photoUrl != null ? '📷 Ver foto' : '📷 Añadir foto',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.textMuted,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
                         ),
                       ),
-                    ],
-                    const Spacer(),
-                    if (completed)
-                      const AppBadge.green(text: '✓ Completado'),
+                    ),
                   ],
                 ),
 
-                const SizedBox(height: 6),
-                Text(
-                  widget.meal['description'] ?? '',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.textPrimary,
-                    height: 1.35,
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    widget.meal['description'] ?? '',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textPrimary,
+                      height: 1.35,
+                    ),
                   ),
                 ),
+                if (completed) ...[
+                  const SizedBox(height: 6),
+                  const Center(child: AppBadge.green(text: '✓ Completado')),
+                ],
 
                 // Comentario existente
                 if (comment != null && comment.isNotEmpty) ...[
@@ -830,22 +1358,6 @@ class _MealCardState extends State<_MealCard> {
                     ),
                     const Spacer(),
                     _ActionButton(
-                      label: '💬',
-                      active: comment != null && comment.isNotEmpty,
-                      activeColor: AppColors.primary,
-                      activeBg: AppColors.primaryDim,
-                      onTap: _abrirComentario,
-                    ),
-                    const SizedBox(width: 6),
-                    _ActionButton(
-                      label: photoUrl != null ? '📷 Ver foto' : '📷',
-                      active: photoUrl != null,
-                      activeColor: AppColors.primary,
-                      activeBg: AppColors.primaryDim,
-                      onTap: widget.onSubirFoto,
-                    ),
-                    const SizedBox(width: 6),
-                    _ActionButton(
                       label: '👍',
                       active: liked == true,
                       activeColor: AppColors.primary,
@@ -895,7 +1407,7 @@ class _ActionButton extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         padding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
           color: active ? activeBg : AppColors.surface2,
           borderRadius: BorderRadius.circular(20),
@@ -903,7 +1415,7 @@ class _ActionButton extends StatelessWidget {
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 12,
+            fontSize: 13,
             fontWeight: FontWeight.w600,
             color: active ? activeColor : AppColors.textMuted,
           ),
@@ -916,8 +1428,13 @@ class _ActionButton extends StatelessWidget {
 class _StatCard extends StatelessWidget {
   final String label;
   final String value;
+  final Color? valueColor;
 
-  const _StatCard({required this.label, required this.value});
+  const _StatCard({
+    required this.label,
+    required this.value,
+    this.valueColor,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -933,20 +1450,92 @@ class _StatCard extends StatelessWidget {
         children: [
           Text(
             value,
-            style: const TextStyle(
-              fontSize: 22,
+            style: TextStyle(
+              fontSize: 20,
               fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
+              color: valueColor ?? AppColors.textPrimary,
             ),
           ),
           const SizedBox(height: 2),
           Text(
             label,
-            style: const TextStyle(
-                fontSize: 12, color: AppColors.textMuted),
+            style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
           ),
         ],
       ),
     );
   }
+}
+
+// ─── Sparkline painter ───────────────────────────────────────────────────────
+
+class _SparklinePainter extends CustomPainter {
+  final List<double> values;
+
+  _SparklinePainter({required this.values});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.length < 2) return;
+
+    final minV = values.reduce((a, b) => a < b ? a : b);
+    final maxV = values.reduce((a, b) => a > b ? a : b);
+    final range = (maxV - minV).abs() < 0.001 ? 1.0 : maxV - minV;
+
+    final pad = 6.0;
+
+    double px(int i) => i / (values.length - 1) * size.width;
+    double py(double v) =>
+        size.height - pad - ((v - minV) / range) * (size.height - pad * 2);
+
+    final pts = List.generate(
+        values.length, (i) => Offset(px(i), py(values[i])));
+
+    // Gradient fill
+    final fillPath = Path()
+      ..moveTo(pts.first.dx, size.height)
+      ..lineTo(pts.first.dx, pts.first.dy);
+    for (int i = 1; i < pts.length; i++) {
+      fillPath.lineTo(pts[i].dx, pts[i].dy);
+    }
+    fillPath
+      ..lineTo(pts.last.dx, size.height)
+      ..close();
+
+    canvas.drawPath(
+      fillPath,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            AppColors.primary.withOpacity(0.18),
+            AppColors.primary.withOpacity(0.0),
+          ],
+        ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)),
+    );
+
+    // Line
+    final linePath = Path()
+      ..moveTo(pts.first.dx, pts.first.dy);
+    for (int i = 1; i < pts.length; i++) {
+      linePath.lineTo(pts[i].dx, pts[i].dy);
+    }
+    canvas.drawPath(
+      linePath,
+      Paint()
+        ..color = AppColors.primary
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    // Último punto destacado
+    canvas.drawCircle(pts.last, 4.5, Paint()..color = AppColors.primary);
+    canvas.drawCircle(pts.last, 2.5, Paint()..color = Colors.white);
+  }
+
+  @override
+  bool shouldRepaint(_SparklinePainter old) => old.values != values;
 }

@@ -2,18 +2,18 @@ import 'package:flutter/material.dart';
 
 class AppColors {
   // Fondos
-  static const Color background = Color(0xFFF8F8F6);
+  static const Color background = Color(0xFFF4FAF8);
   static const Color surface = Color(0xFFFFFFFF);
-  static const Color surface2 = Color(0xFFF2F2EF);
-  static const Color border = Color(0xFFE4E4DF);
+  static const Color surface2 = Color(0xFFE0F2F1);
+  static const Color border = Color(0xFFB2DFDB);
 
   // Acento principal
-  static const Color primary = Color(0xFF1A7A4A);
-  static const Color primaryDim = Color(0xFFEAF4EE);
+  static const Color primary = Color(0xFF00796B);
+  static const Color primaryDim = Color(0xFFE0F2F1);
 
   // Texto
-  static const Color textPrimary = Color(0xFF1A1A1A);
-  static const Color textMuted = Color(0xFF8A8A82);
+  static const Color textPrimary = Color(0xFF004D40);
+  static const Color textMuted = Color(0xFF546E7A);
 
   // Semánticos
   static const Color amber = Color(0xFFE8A838);
@@ -33,7 +33,7 @@ class AppTheme {
         onPrimary: Colors.white,
         onSurface: AppColors.textPrimary,
       ),
-      fontFamily: 'SF Pro Display',
+      fontFamily: 'Roboto',
       appBarTheme: const AppBarTheme(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.textPrimary,

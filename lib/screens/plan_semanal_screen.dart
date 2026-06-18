@@ -13,6 +13,7 @@ class PlanSemanalScreen extends StatefulWidget {
 
 class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
   int _selectedDay = 0;
+  late DateTime _weekStart;
   bool _isLoading = true;
   List<Map<String, dynamic>> _meals = [];
 
@@ -23,6 +24,23 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
     'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'
   ];
 
+  static DateTime _monday(DateTime d) =>
+      d.subtract(Duration(days: d.weekday - 1));
+
+  DateTime get _selectedDate => _weekStart.add(Duration(days: _selectedDay));
+
+  String _weekLabel() {
+    const meses = [
+      '', 'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+      'jul', 'ago', 'sep', 'oct', 'nov', 'dic'
+    ];
+    final end = _weekStart.add(const Duration(days: 6));
+    if (_weekStart.month == end.month) {
+      return '${_weekStart.day}–${end.day} ${meses[end.month]}';
+    }
+    return '${_weekStart.day} ${meses[_weekStart.month]} – ${end.day} ${meses[end.month]}';
+  }
+
   final List<String> _mealTypes = [
     'Desayuno', 'Almuerzo', 'Merienda', 'Cena'
   ];
@@ -30,17 +48,19 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
   @override
   void initState() {
     super.initState();
+    _weekStart = _monday(DateTime.now());
     _cargarPlan();
   }
 
   Future<void> _cargarPlan() async {
     setState(() => _isLoading = true);
     try {
+      final dateStr = _selectedDate.toIso8601String().substring(0, 10);
       final data = await Supabase.instance.client
           .from('weekly_plan')
           .select()
           .eq('client_id', widget.cliente['id'])
-          .eq('day_of_week', _daysFull[_selectedDay]);
+          .eq('plan_date', dateStr);
 
       final mealOrder = ['Desayuno', 'Almuerzo', 'Merienda', 'Cena'];
       final sorted = List<Map<String, dynamic>>.from(data);
@@ -209,21 +229,25 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
       for (final dayIdx in targetDayIndices) {
         final targetDay = _daysFull[dayIdx];
         // Borrar comidas existentes en el día destino
+        final targetDate =
+            _weekStart.add(Duration(days: dayIdx)).toIso8601String().substring(0, 10);
         await Supabase.instance.client
             .from('weekly_plan')
             .delete()
             .eq('client_id', widget.cliente['id'])
-            .eq('day_of_week', targetDay);
+            .eq('plan_date', targetDate);
 
         // Insertar copia de cada comida
         for (final meal in _meals) {
           await Supabase.instance.client.from('weekly_plan').insert({
             'client_id': widget.cliente['id'],
-            'day_of_week': targetDay,
+            'day_of_week': _daysFull[dayIdx],
+            'plan_date': targetDate,
             'meal_type': meal['meal_type'],
             'description': meal['description'],
             'scheduled_time': meal['scheduled_time'],
             'completed': false,
+            'ingredients': meal['ingredients'] ?? [],
           });
         }
       }
@@ -249,7 +273,6 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
         TextEditingController(text: meal?['description'] ?? '');
     String selectedType = meal?['meal_type'] ?? _mealTypes[0];
 
-    // Parsear hora existente si hay
     TimeOfDay? selectedTime;
     final existingTime = meal?['scheduled_time'] as String?;
     if (existingTime != null && existingTime.isNotEmpty) {
@@ -262,6 +285,17 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
       }
     }
 
+    // Ingredientes
+    List<Map<String, dynamic>> ingredients = [];
+    final rawIng = meal?['ingredients'];
+    if (rawIng is List) {
+      ingredients = rawIng
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    }
+    final ingNameCtrl = TextEditingController();
+    final ingGramsCtrl = TextEditingController();
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -272,7 +306,7 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setModalState) {
-            return Padding(
+            return SingleChildScrollView(
               padding: EdgeInsets.only(
                 left: 20,
                 right: 20,
@@ -304,7 +338,7 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '${_days[_selectedDay]} · ${_daysFull[_selectedDay]}',
+                    '${_daysFull[_selectedDay]} ${_selectedDate.day}/${_selectedDate.month}',
                     style: const TextStyle(
                         fontSize: 13, color: AppColors.textMuted),
                   ),
@@ -367,8 +401,8 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
                     onTap: () async {
                       final picked = await showTimePicker(
                         context: context,
-                        initialTime:
-                            selectedTime ?? const TimeOfDay(hour: 8, minute: 0),
+                        initialTime: selectedTime ??
+                            const TimeOfDay(hour: 8, minute: 0),
                         builder: (context, child) {
                           return MediaQuery(
                             data: MediaQuery.of(context).copyWith(
@@ -424,8 +458,7 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
                               onTap: () =>
                                   setModalState(() => selectedTime = null),
                               child: const Icon(Icons.close_rounded,
-                                  size: 16,
-                                  color: AppColors.textMuted),
+                                  size: 16, color: AppColors.textMuted),
                             ),
                         ],
                       ),
@@ -445,15 +478,137 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
                   const SizedBox(height: 8),
                   TextField(
                     controller: descController,
-                    maxLines: 3,
+                    maxLines: 2,
                     autofocus: true,
                     decoration: const InputDecoration(
-                      hintText:
-                          'Ej: Pollo a la plancha con arroz integral...',
+                      hintText: 'Ej: Pizza margarita, Macarrones boloñesa...',
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
 
+                  // ── Ingredientes ───────────────────────────────────────────
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Ingredientes',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.textMuted,
+                              ),
+                            ),
+                            Text(
+                              'Opcional · la lista de la compra los usará',
+                              style: TextStyle(
+                                  fontSize: 11, color: AppColors.textMuted),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Chips ingredientes añadidos
+                  if (ingredients.isNotEmpty) ...[
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: ingredients.asMap().entries.map((e) {
+                        final idx = e.key;
+                        final ing = e.value;
+                        final grams = ing['grams'];
+                        final label = grams != null
+                            ? '${ing['name']} · ${grams}g'
+                            : '${ing['name']}';
+                        return Container(
+                          padding: const EdgeInsets.only(
+                              left: 10, top: 5, bottom: 5, right: 6),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryDim,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: AppColors.primary.withOpacity(0.2),
+                                width: 0.5),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                label,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              GestureDetector(
+                                onTap: () => setModalState(
+                                    () => ingredients.removeAt(idx)),
+                                child: const Icon(Icons.close_rounded,
+                                    size: 13, color: AppColors.primary),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+
+                  // Fila añadir ingrediente
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: TextField(
+                          controller: ingNameCtrl,
+                          textCapitalization: TextCapitalization.sentences,
+                          decoration: const InputDecoration(
+                              hintText: 'Ingrediente'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 68,
+                        child: TextField(
+                          controller: ingGramsCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration:
+                              const InputDecoration(hintText: 'g'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 44,
+                        height: 48,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            final name = ingNameCtrl.text.trim();
+                            if (name.isEmpty) return;
+                            final grams = int.tryParse(
+                                ingGramsCtrl.text.trim());
+                            setModalState(() {
+                              ingredients
+                                  .add({'name': name, 'grams': grams});
+                              ingNameCtrl.clear();
+                              ingGramsCtrl.clear();
+                            });
+                          },
+                          style: ElevatedButton.styleFrom(
+                              padding: EdgeInsets.zero),
+                          child: const Icon(Icons.add_rounded, size: 20),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 24),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
@@ -465,6 +620,7 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
                           mealType: selectedType,
                           description: descController.text.trim(),
                           scheduledTime: selectedTime,
+                          ingredients: ingredients,
                         );
                       },
                       child: Text(meal == null ? 'Añadir' : 'Guardar'),
@@ -484,6 +640,7 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
     required String mealType,
     required String description,
     TimeOfDay? scheduledTime,
+    List<Map<String, dynamic>> ingredients = const [],
   }) async {
     final timeString = scheduledTime != null
         ? '${scheduledTime.hour.toString().padLeft(2, '0')}:${scheduledTime.minute.toString().padLeft(2, '0')}:00'
@@ -494,16 +651,19 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
         await Supabase.instance.client.from('weekly_plan').insert({
           'client_id': widget.cliente['id'],
           'day_of_week': _daysFull[_selectedDay],
+          'plan_date': _selectedDate.toIso8601String().substring(0, 10),
           'meal_type': mealType,
           'description': description,
           'scheduled_time': timeString,
           'completed': false,
+          'ingredients': ingredients,
         });
       } else {
         await Supabase.instance.client.from('weekly_plan').update({
           'meal_type': mealType,
           'description': description,
           'scheduled_time': timeString,
+          'ingredients': ingredients,
         }).eq('id', id);
       }
       _cargarPlan();
@@ -538,16 +698,57 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
       ),
       body: Column(
         children: [
-          // Tabs de días
+          // Navegación de semana
+          Container(
+            color: AppColors.surface,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.chevron_left_rounded),
+                  color: AppColors.textMuted,
+                  iconSize: 22,
+                  onPressed: () {
+                    setState(() => _weekStart =
+                        _weekStart.subtract(const Duration(days: 7)));
+                    _cargarPlan();
+                  },
+                ),
+                Text(
+                  _weekLabel(),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right_rounded),
+                  color: AppColors.textMuted,
+                  iconSize: 22,
+                  onPressed: () {
+                    setState(() =>
+                        _weekStart = _weekStart.add(const Duration(days: 7)));
+                    _cargarPlan();
+                  },
+                ),
+              ],
+            ),
+          ),
+          Container(height: 0.5, color: AppColors.border),
+
+          // Tabs de días con fecha
           Container(
             color: AppColors.surface,
             padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: List.generate(_days.length, (i) {
                   final isSelected = i == _selectedDay;
+                  final date = _weekStart.add(Duration(days: i));
                   return GestureDetector(
                     onTap: () {
                       setState(() => _selectedDay = i);
@@ -557,22 +758,36 @@ class _PlanSemanalScreenState extends State<PlanSemanalScreen> {
                       duration: const Duration(milliseconds: 150),
                       margin: const EdgeInsets.only(right: 6),
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 7),
+                          horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
                         color: isSelected
                             ? AppColors.primary
                             : AppColors.surface2,
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: Text(
-                        _days[i],
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: isSelected
-                              ? Colors.white
-                              : AppColors.textMuted,
-                        ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _days[i],
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: isSelected
+                                  ? Colors.white
+                                  : AppColors.textMuted,
+                            ),
+                          ),
+                          Text(
+                            '${date.day}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isSelected
+                                  ? Colors.white.withOpacity(0.85)
+                                  : AppColors.textMuted,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   );
@@ -719,6 +934,50 @@ class _NutriMealCard extends StatelessWidget {
     return '';
   }
 
+  void _verFoto(BuildContext context, String url) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '',
+      barrierColor: Colors.black87,
+      transitionDuration: const Duration(milliseconds: 220),
+      transitionBuilder: (_, anim, __, child) => ScaleTransition(
+        scale: CurvedAnimation(parent: anim, curve: Curves.easeOutBack),
+        child: FadeTransition(opacity: anim, child: child),
+      ),
+      pageBuilder: (_, __, ___) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.network(url, fit: BoxFit.contain,
+                  width: double.infinity),
+            ),
+            Positioned(
+              top: 10,
+              right: 10,
+              child: GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close_rounded,
+                      color: Colors.white, size: 20),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool completed = meal['completed'] ?? false;
@@ -737,24 +996,6 @@ class _NutriMealCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (photoUrl != null)
-            GestureDetector(
-              onTap: () {
-                showDialog(
-                  context: context,
-                  builder: (_) => Dialog(
-                    child: Image.network(photoUrl, fit: BoxFit.contain),
-                  ),
-                );
-              },
-              child: Image.network(
-                photoUrl,
-                width: double.infinity,
-                height: 160,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-              ),
-            ),
           Padding(
             padding: const EdgeInsets.all(14),
             child: Column(
@@ -812,6 +1053,22 @@ class _NutriMealCard extends StatelessWidget {
                         bgColor: AppColors.redDim,
                       ),
                     ],
+                    if (photoUrl != null) ...[
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onTap: () => _verFoto(context, photoUrl),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryDim,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Text('📷',
+                              style: TextStyle(fontSize: 12)),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 6),
@@ -824,6 +1081,44 @@ class _NutriMealCard extends StatelessWidget {
                     height: 1.35,
                   ),
                 ),
+
+                // Ingredientes
+                Builder(builder: (_) {
+                  final raw = meal['ingredients'];
+                  if (raw is! List || raw.isEmpty) return const SizedBox.shrink();
+                  final list = raw
+                      .map((e) => Map<String, dynamic>.from(e as Map))
+                      .toList();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Wrap(
+                      spacing: 5,
+                      runSpacing: 4,
+                      children: list.map((ing) {
+                        final grams = ing['grams'];
+                        final label = grams != null
+                            ? '${ing['name']} · ${grams}g'
+                            : '${ing['name']}';
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryDim,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            label,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  );
+                }),
 
                 // Comentario del cliente
                 if (comment != null && comment.isNotEmpty) ...[

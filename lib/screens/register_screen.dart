@@ -12,7 +12,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  String _selectedRole = 'cliente';
+  final String _selectedRole = 'nutricionista';
   bool _isLoading = false;
 
   Future<void> _register() async {
@@ -72,16 +72,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     labelText: 'Contraseña', border: OutlineInputBorder()),
               ),
               const SizedBox(height: 20),
-              DropdownButtonFormField<String>(
-                value: _selectedRole,
-                decoration: const InputDecoration(
-                    labelText: 'Rol', border: OutlineInputBorder()),
-                items: const [
-                  DropdownMenuItem(value: 'cliente', child: Text('Cliente')),
-                  DropdownMenuItem(value: 'nutricionista', child: Text('Nutricionista')),
-                ],
-                onChanged: (value) => setState(() => _selectedRole = value!),
-              ),
               const SizedBox(height: 30),
               SizedBox(
                 width: double.infinity,

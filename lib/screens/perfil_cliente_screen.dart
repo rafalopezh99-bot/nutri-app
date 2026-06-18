@@ -103,6 +103,10 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
   void _mostrarEditarPerfil() {
     final nameCtrl =
         TextEditingController(text: _profile?['full_name'] ?? '');
+    final phoneCtrl =
+        TextEditingController(text: _profile?['phone'] ?? '');
+    final heightCtrl = TextEditingController(
+        text: _profile?['height_cm']?.toString() ?? '');
     DateTime? selectedDate;
     final existingBirth = _profile?['birth_date'] as String?;
     if (existingBirth != null) {
@@ -119,7 +123,7 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
           borderRadius:
               BorderRadius.vertical(top: Radius.circular(16))),
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModalState) => Padding(
+        builder: (ctx, setModalState) => SingleChildScrollView(
           padding: EdgeInsets.only(
             left: 20,
             right: 20,
@@ -158,6 +162,38 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
                 decoration: const InputDecoration(
                   hintText: 'Tu nombre y apellidos',
                   prefixIcon: Icon(Icons.person_outline_rounded,
+                      size: 18, color: AppColors.textMuted),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Teléfono',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textMuted)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: phoneCtrl,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  hintText: '+34 600 000 000',
+                  prefixIcon: Icon(Icons.phone_outlined,
+                      size: 18, color: AppColors.textMuted),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Altura (cm)',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textMuted)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: heightCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  hintText: '175',
+                  prefixIcon: Icon(Icons.height_rounded,
                       size: 18, color: AppColors.textMuted),
                 ),
               ),
@@ -226,6 +262,8 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
                     Navigator.pop(ctx);
                     await _guardarPerfil(
                         name: nameCtrl.text.trim(),
+                        phone: phoneCtrl.text.trim(),
+                        heightCm: double.tryParse(heightCtrl.text.trim()),
                         birthDate: selectedDate);
                   },
                   child: const Text('Guardar'),
@@ -239,11 +277,13 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
   }
 
   Future<void> _guardarPerfil(
-      {required String name, DateTime? birthDate}) async {
+      {required String name, String? phone, double? heightCm, DateTime? birthDate}) async {
     try {
       final userId = Supabase.instance.client.auth.currentUser!.id;
       await Supabase.instance.client.from('profiles').update({
         if (name.isNotEmpty) 'full_name': name,
+        'phone': phone?.isEmpty == true ? null : phone,
+        'height_cm': heightCm,
         'birth_date': birthDate != null
             ? '${birthDate.year}-${birthDate.month.toString().padLeft(2, '0')}-${birthDate.day.toString().padLeft(2, '0')}'
             : null,
@@ -255,6 +295,109 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
         SnackBar(content: Text('Error: $e')),
       );
     }
+  }
+
+  // ── Foto por medida ────────────────────────────────────────────────────────
+
+  Future<void> _subirFotoMedida(String measurementId) async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+      maxWidth: 1200,
+    );
+    if (picked == null) return;
+    try {
+      final bytes = await picked.readAsBytes();
+      final userId = Supabase.instance.client.auth.currentUser!.id;
+      final ext = picked.name.split('.').last;
+      final path = '$userId/measurement_$measurementId.$ext';
+
+      await Supabase.instance.client.storage
+          .from('progress-photos')
+          .uploadBinary(path, bytes,
+              fileOptions:
+                  FileOptions(upsert: true, contentType: 'image/$ext'));
+
+      final url = Supabase.instance.client.storage
+          .from('progress-photos')
+          .getPublicUrl(path);
+
+      await Supabase.instance.client
+          .from('measurements')
+          .update({'photo_url': url})
+          .eq('id', measurementId);
+
+      _cargarMedidas();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error al subir: $e')),
+      );
+    }
+  }
+
+  void _verFotoMedida(String url, String fecha) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '',
+      barrierColor: Colors.black87,
+      transitionDuration: const Duration(milliseconds: 220),
+      transitionBuilder: (_, anim, __, child) => ScaleTransition(
+        scale: CurvedAnimation(parent: anim, curve: Curves.easeOutBack),
+        child: FadeTransition(opacity: anim, child: child),
+      ),
+      pageBuilder: (_, __, ___) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.network(url, fit: BoxFit.contain,
+                  width: double.infinity),
+            ),
+            Positioned(
+              top: 10,
+              right: 10,
+              child: GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close_rounded,
+                      color: Colors.white, size: 20),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 10,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.55),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  fecha,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ── Mediciones ─────────────────────────────────────────────────────────────
@@ -552,25 +695,11 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Mi perfil'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(0.5),
-          child: Container(height: 0.5, color: AppColors.border),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined, size: 20),
-            onPressed: _mostrarEditarPerfil,
-            color: AppColors.textMuted,
-            tooltip: 'Editar perfil',
-          ),
-        ],
-      ),
       body: _isLoading
           ? const Center(
               child: CircularProgressIndicator(
-                  color: AppColors.primary, strokeWidth: 2))
+                  color: AppColors.primary, strokeWidth: 2),
+            )
           : RefreshIndicator(
               color: AppColors.primary,
               onRefresh: _cargar,
@@ -601,6 +730,7 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
     final name = _profile?['full_name'] ?? 'Sin nombre';
     final avatarUrl = _profile?['avatar_url'] as String?;
     final birthDate = _profile?['birth_date'] as String?;
+    final phone = _profile?['phone'] as String?;
     final edad = _calcularEdad(birthDate);
 
     return Container(
@@ -703,6 +833,31 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
               ),
             ),
           ],
+          if (phone != null && phone.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.phone_outlined,
+                    size: 13, color: AppColors.textMuted),
+                const SizedBox(width: 4),
+                Text(
+                  phone,
+                  style: const TextStyle(
+                      fontSize: 13, color: AppColors.textMuted),
+                ),
+              ],
+            ),
+          ] else ...[
+            const SizedBox(height: 6),
+            GestureDetector(
+              onTap: _mostrarEditarPerfil,
+              child: const Text(
+                '+ Añadir teléfono',
+                style: TextStyle(fontSize: 13, color: AppColors.primary),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -711,6 +866,7 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
   Widget _buildMedidasSection() {
     final last =
         _measurements.isNotEmpty ? _measurements.last : null;
+    final heightCm = _profile?['height_cm'];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -750,6 +906,16 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
           children: [
             Expanded(
               child: _StatCard(
+                icon: Icons.height_rounded,
+                label: 'Altura',
+                value: heightCm != null ? '${heightCm} cm' : '—',
+                color: AppColors.textMuted,
+                onTap: _mostrarEditarPerfil,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _StatCard(
                 icon: Icons.monitor_weight_outlined,
                 label: 'Peso',
                 value: last?['weight_kg'] != null
@@ -769,7 +935,11 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
                 color: AppColors.amber,
               ),
             ),
-            const SizedBox(width: 8),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
             Expanded(
               child: _StatCard(
                 icon: Icons.straighten_rounded,
@@ -780,6 +950,10 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
                 color: AppColors.textMuted,
               ),
             ),
+            const SizedBox(width: 8),
+            const Expanded(child: SizedBox()),
+            const SizedBox(width: 8),
+            const Expanded(child: SizedBox()),
           ],
         ),
         if (last != null) ...[
@@ -890,8 +1064,10 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
             children: reversed.asMap().entries.map((e) {
               final m = e.value;
               final isLast = e.key == reversed.length - 1;
+              final photoUrl = m['photo_url'] as String?;
+              final fecha = _formatDate(m['created_at'] as String?);
               return _HistorialRow(
-                date: _formatDate(m['created_at'] as String?),
+                date: fecha,
                 weight: m['weight_kg'] != null
                     ? '${m['weight_kg']} kg'
                     : null,
@@ -901,9 +1077,13 @@ class _PerfilClienteScreenState extends State<PerfilClienteScreen> {
                 waist: m['waist_cm'] != null
                     ? '${m['waist_cm']} cm'
                     : null,
+                photoUrl: photoUrl,
                 isLast: isLast,
                 onEdit: () => _mostrarEditarMedida(m),
                 onDelete: () => _confirmarEliminar(m['id']),
+                onPhoto: photoUrl != null
+                    ? () => _verFotoMedida(photoUrl, fecha)
+                    : () => _subirFotoMedida(m['id'] as String),
               );
             }).toList(),
           ),
@@ -1134,37 +1314,53 @@ class _StatCard extends StatelessWidget {
   final String label;
   final String value;
   final Color color;
+  final VoidCallback? onTap;
 
   const _StatCard(
       {required this.icon,
       required this.label,
       required this.value,
-      required this.color});
+      required this.color,
+      this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border, width: 0.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 16, color: color),
-          const SizedBox(height: 8),
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary)),
-          const SizedBox(height: 2),
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 10, color: AppColors.textMuted)),
-        ],
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border, width: 0.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 16, color: color),
+                if (onTap != null && value == '—') ...[
+                  const Spacer(),
+                  const Icon(Icons.add_rounded,
+                      size: 13, color: AppColors.primary),
+                ],
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(value,
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: value == '—'
+                        ? AppColors.textMuted
+                        : AppColors.textPrimary)),
+            const SizedBox(height: 2),
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 10, color: AppColors.textMuted)),
+          ],
+        ),
       ),
     );
   }
@@ -1366,18 +1562,22 @@ class _HistorialRow extends StatelessWidget {
   final String? weight;
   final String? fat;
   final String? waist;
+  final String? photoUrl;
   final bool isLast;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback onPhoto;
 
   const _HistorialRow(
       {required this.date,
       this.weight,
       this.fat,
       this.waist,
+      this.photoUrl,
       required this.isLast,
       required this.onEdit,
-      required this.onDelete});
+      required this.onDelete,
+      required this.onPhoto});
 
   @override
   Widget build(BuildContext context) {
@@ -1422,10 +1622,26 @@ class _HistorialRow extends StatelessWidget {
               ],
             ),
           ),
+          // Botón foto
+          GestureDetector(
+            onTap: onPhoto,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Icon(
+                photoUrl != null
+                    ? Icons.photo_rounded
+                    : Icons.add_photo_alternate_outlined,
+                size: 16,
+                color: photoUrl != null
+                    ? AppColors.primary
+                    : AppColors.textMuted,
+              ),
+            ),
+          ),
           GestureDetector(
             onTap: onEdit,
             child: const Padding(
-              padding: EdgeInsets.only(left: 8),
+              padding: EdgeInsets.only(left: 10),
               child: Icon(Icons.edit_outlined,
                   size: 15, color: AppColors.textMuted),
             ),
